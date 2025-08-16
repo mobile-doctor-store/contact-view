@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contact Viewer with Hide and Unhide Columns</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f0f2f5;
+    }
+    input, button, select {
+      margin: 5px 10px 5px 0;
+      padding: 6px 10px;
+      font-size: 14px;
+    }
+    #columns-select {
+      min-width: 300px;
+      max-width: 600px;
+      height: 100px;
+    }
+    #export-btn {
+      padding: 8px 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      table-layout: fixed;
+      background: white;
+      box-shadow: 0 0 8px #ccc;
+      user-select: none;
+      overflow-x: auto;
+    }
+    thead tr {
+      background-color: #0066ff;
+      color: white;
+      font-weight: bold;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+      overflow: visible;
+      position: relative;
+    }
+    tbody tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    th {
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+    }
+    th .sort-arrow {
+      font-size: 10px;
+      margin-left: 4px;
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      opacity: 0.6;
+    }
+    .hide-btn {
+      margin-top: 10px;
+      display: inline-block;
+      padding: 5px;
+      background-color: #dc3545;
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .hide-btn:hover {
+      background-color: #c82333;
+    }
+    .hidden-column {
+      display: none;
+    }
+    .show-hidden-btn {
+      margin-top: 10px;
+      padding: 8px 16px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    .show-hidden-btn:hover {
+      background-color: #0056b3;
+    }
+    .hidden-columns-list {
+      list-style: none;
+      padding-left: 0;
+    }
+    .hidden-columns-list li {
+      margin: 5px 0;
+    }
+    .hidden-columns-list button {
+      padding: 5px 10px;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    .hidden-columns-list button:hover {
+      background-color: #218838;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>Contact Viewer (CSV / vCard .vcf supported)</h2>
+
+  <input type="file" id="file" accept=".csv,.vcf" />
+  <span id="file-name" style="margin-left: 10px; font-weight: bold;"></span>
+  <button id="clear-btn">Clear Table</button>
+  <input type="text" id="search" placeholder="Search contacts..." style="width: 200px;" />
+
+  <br/>
+
+  <label for="columns-select">Select Columns to Export:</label><br/>
+  <select id="columns-select" multiple></select>
+  <button id="export-btn">Export Selected</button>
+
+  <br/>
+
+  <button id="show-hidden-btn" class="show-hidden-btn">Show Hidden Columns</button>
+
+  <ul id="hidden-columns-list" class="hidden-columns-list" style="display:none;"></ul>
+
+  <table id="contacts" spellcheck="false">
+    <!-- Table dynamically generated -->
+  </table>
+
+  <!-- PapaParse for CSV -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+    let contactsData = [];
+    let displayedData = [];
+    let sortColumn = null;
+    let sortDirection = 1; // 1=asc, -1=desc
+    let currentHeaders = [];
+    let columnVisibility = JSON.parse(localStorage.getItem('columnVisibility')) || {};
+
+    const fileInput = document.getElementById('file');
+    const fileNameSpan = document.getElementById('file-name');
+    const table = document.getElementById('contacts');
+    const searchInput = document.getElementById('search');
+    const clearBtn = document.getElementById('clear-btn');
+    const columnsSelect = document.getElementById('columns-select');
+    const exportBtn = document.getElementById('export-btn');
+    const showHiddenBtn = document.getElementById('show-hidden-btn');
+    const hiddenColumnsList = document.getElementById('hidden-columns-list');
+    const moreBtn = document.createElement('button');
+    moreBtn.classList.add('more-btn');
+    moreBtn.textContent = "Show More Fields";
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      fileNameSpan.textContent = '';
+      contactsData = [];
+      displayedData = [];
+      sortColumn = null;
+      sortDirection = 1;
+      currentHeaders = [];
+      columnsSelect.innerHTML = '';
+
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (ext === 'csv') {
+        parseCSV(file);
+      } else if (ext === 'vcf') {
+        parseVCF(file);
+      } else {
+        alert('Unsupported file format! Please upload CSV or vCard (.vcf)');
+        e.target.value = '';
+      }
+    });
+
+    function parseCSV(file) {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          if (results.errors.length) {
+            alert('CSV parsing error. Check console for details.');
+            console.error('CSV parse errors:', results.errors);
+            return;
+          }
+          contactsData = results.data;
+          displayedData = [...contactsData];
+          fileNameSpan.textContent = `Loaded: ${file.name}`;
+          updateHeadersAndRender();
+        }
+      });
+    }
+
+    function parseVCF(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = e.target.result;
+        contactsData = parseVCard(text);
+        displayedData = [...contactsData];
+        fileNameSpan.textContent = `Loaded: ${file.name}`;
+        updateHeadersAndRender();
+      };
+      reader.readAsText(file);
+    }
+
+    // vCard parser
+    function parseVCard(vcfText) {
+      const contacts = [];
+      const blocks = vcfText.split(/END:VCARD/i);
+      blocks.forEach(block => {
+        if (!block.trim()) return;
+        const contact = {};
+        const lines = block.split(/\r?\n/);
+        lines.forEach(line => {
+          let [key, ...valueParts] = line.split(':');
+          if (!key || !valueParts.length) return;
+          let value = valueParts.join(':').trim();
+
+          key = key.toUpperCase().replace(/;.*/, '');
+
+          if (key === 'FN') contact['Name'] = value;
+          else if (key === 'TEL') {
+            let phoneIndex = 1;
+            while (contact[`Phone ${phoneIndex}`]) phoneIndex++;
+            contact[`Phone ${phoneIndex}`] = value;
+          }
+          else if (key === 'EMAIL') {
+            let emailIndex = 1;
+            while (contact[`Email ${emailIndex}`]) emailIndex++;
+            contact[`Email ${emailIndex}`] = value;
+          }
+          else {
+            contact[key] = value;
+          }
+        });
+        if (Object.keys(contact).length) contacts.push(contact);
+      });
+      return contacts;
+    }
+
+    clearBtn.addEventListener('click', () => {
+      contactsData = [];
+      displayedData = [];
+      currentHeaders = [];
+      table.innerHTML = '';
+      fileNameSpan.textContent = '';
+      fileInput.value = '';
+      searchInput.value = '';
+      columnsSelect.innerHTML = '';
+      sortColumn = null;
+      sortDirection = 1;
+    });
+
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      if (!query) {
+        displayedData = [...contactsData];
+      } else {
+        displayedData = contactsData.filter(contact =>
+          Object.values(contact).some(val =>
+            val && val.toString().toLowerCase().includes(query)
+          )
+        );
+      }
+      renderTable(displayedData, currentHeaders);
+    });
+
+    function escapeHTML(str) {
+      return String(str || '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      })[char]);
+    }
+
+    function extractHeaders(data) {
+      if (!data.length) return [];
+
+      const fieldUsage = {};
+      data.forEach(contact => {
+        for (const key in contact) {
+          if (!fieldUsage[key]) fieldUsage[key] = 0;
+          if (contact[key] && contact[key].toString().trim() !== '') {
+            fieldUsage[key]++;
+          }
+        }
+      });
+
+      const usageArray = Object.entries(fieldUsage);
+      usageArray.sort((a, b) => b[1] - a[1]);
+
+      const importantFieldsPriority = [
+        'Name', 'First Name', 'Last Name', 'Phone', 'Phone 1 - Value', 'Phone 1',
+        'Phone 1 - Label', 'Email', 'E-mail 1 - Value', 'Email 1', 'E-mail 1',
+        'Birthday', 'Labels', 'Organization Name'
+      ];
+
+      const importantWithData = importantFieldsPriority.filter(f =>
+        usageArray.find(([key, count]) => key === f && count > 0)
+      );
+
+      const otherWithData = usageArray
+        .filter(([field, count]) => count > 0 && !importantWithData.includes(field))
+        .map(([field]) => field);
+
+      const emptyFields = usageArray
+        .filter(([field, count]) => count === 0)
+        .map(([field]) => field);
+
+      return [...importantWithData, ...otherWithData, ...emptyFields.sort()];
+    }
+
+    function renderTable(data, headers) {
+      if (!data.length) {
+        table.innerHTML = '<tr><td colspan="100%">No contacts found.</td></tr>';
+        return;
+      }
+
+      table.innerHTML = '';
+
+      const thead = document.createElement('thead');
+      const headRow = document.createElement('tr');
+
+      headers.forEach((header, index) => {
+        const th = document.createElement('th');
+        th.textContent = header;
+
+        const hideBtn = document.createElement('button');
+        hideBtn.textContent = "Hide";
+        hideBtn.classList.add('hide-btn');
+        hideBtn.addEventListener('click', () => {
+          columnVisibility[header] = false;
+          localStorage.setItem('columnVisibility', JSON.stringify(columnVisibility));
+          renderTable(displayedData, headers);
+        });
+        
+        th.appendChild(hideBtn);
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = columnVisibility[header] !== false;
+        checkbox.addEventListener('change', (e) => {
+          columnVisibility[header] = e.target.checked;
+          localStorage.setItem('columnVisibility', JSON.stringify(columnVisibility));
+          renderTable(displayedData, headers);
+        });
+
+        const checkboxWrapper = document.createElement('div');
+        checkboxWrapper.appendChild(checkbox);
+        th.appendChild(checkboxWrapper);
+
+        if (columnVisibility[header] === false) {
+          th.classList.add('hidden-column');
+        }
+
+        th.addEventListener('click', () => {
+          if (sortColumn === header) {
+            sortDirection *= -1;
+          } else {
+            sortColumn = header;
+            sortDirection = 1;
+          }
+          sortAndRender();
+        });
+
+        // Sort arrow
+        if (sortColumn === header) {
+          const arrow = document.createElement('span');
+          arrow.className = 'sort-arrow';
+          arrow.textContent = sortDirection === 1 ? '▴' : '▾';
+          th.appendChild(arrow);
+        }
+
+        // Add resizer div
+        const resizer = document.createElement('div');
+        resizer.className = 'resizer';
+        th.appendChild(resizer);
+        setupResizer(resizer, th);
+
+        headRow.appendChild(th);
+      });
+
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      data.forEach(contact => {
+        const tr = document.createElement('tr');
+        headers.forEach((header, index) => {
+          const td = document.createElement('td');
+          td.innerHTML = escapeHTML(contact[header] || '');
+          if (columnVisibility[header] === false) {
+            td.classList.add('hidden-column');
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+    }
+
+    function setupResizer(resizer, th) {
+      let startX, startWidth;
+
+      resizer.addEventListener('mousedown', (e) => {
+        startX = e.pageX;
+        startWidth = th.offsetWidth;
+        document.documentElement.style.cursor = 'col-resize';
+
+        function onMouseMove(eMove) {
+          const newWidth = startWidth + (eMove.pageX - startX);
+          if (newWidth > 40) {
+            th.style.width = newWidth + 'px';
+            columnWidths[th.textContent] = newWidth;  // Save width in localStorage
+            localStorage.setItem('columnWidths', JSON.stringify(columnWidths));
+          }
+        }
+
+        function onMouseUp() {
+          document.documentElement.style.cursor = '';
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        }
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
+
+    function sortAndRender() {
+      if (!sortColumn) {
+        renderTable(displayedData, currentHeaders);
+        return;
+      }
+      displayedData.sort((a, b) => {
+        let valA = (a[sortColumn] || '').toString().toLowerCase();
+        let valB = (b[sortColumn] || '').toString().toLowerCase();
+
+        const numA = parseFloat(valA.replace(/[^\d.-]/g, ''));
+        const numB = parseFloat(valB.replace(/[^\d.-]/g, ''));
+        if (!isNaN(numA) && !isNaN(numB)) {
+          return (numA - numB) * sortDirection;
+        }
+        return valA.localeCompare(valB) * sortDirection;
+      });
+      renderTable(displayedData, currentHeaders);
+    }
+
+    function updateHeadersAndRender() {
+      currentHeaders = extractHeaders(displayedData);
+      renderTable(displayedData, currentHeaders);
+      populateColumnsSelector(currentHeaders);
+      setupMoreButton(currentHeaders);
+    }
+
+    function populateColumnsSelector(headers) {
+      columnsSelect.innerHTML = '';
+      headers.forEach(h => {
+        const option = document.createElement('option');
+        option.value = h;
+        option.textContent = h;
+        option.selected = true; // default select all columns
+        columnsSelect.appendChild(option);
+      });
+    }
+
+    exportBtn.addEventListener('click', () => {
+      const selectedOptions = Array.from(columnsSelect.selectedOptions).map(opt => opt.value);
+      if (!selectedOptions.length) {
+        alert('Please select at least one column to export.');
+        return;
+      }
+      if (!displayedData.length) {
+        alert('No data to export.');
+        return;
+      }
+      const rows = [];
+
+      // Add header row
+      rows.push(selectedOptions);
+
+      // Add data rows
+      displayedData.forEach(contact => {
+        const row = selectedOptions.map(field => {
+          const val = contact[field];
+          if (val === undefined || val === null) return '';
+          const strVal = val.toString().replace(/"/g, '""');
+          if (strVal.includes(',') || strVal.includes('\n') || strVal.includes('"')) {
+            return `"${strVal}"`;
+          }
+          return strVal;
+        });
+        rows.push(row);
+      });
+
+      const csvContent = rows.map(r => r.join(',')).join('\n');
+      downloadCSV(csvContent, 'contacts_export.csv');
+    });
+
+    function downloadCSV(content, filename) {
+      const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    // Show the hidden columns in a list
+    showHiddenBtn.addEventListener('click', () => {
+      hiddenColumnsList.style.display = hiddenColumnsList.style.display === 'none' ? 'block' : 'none';
+      hiddenColumnsList.innerHTML = '';
+      Object.keys(columnVisibility).forEach((header) => {
+        if (columnVisibility[header] === false) {
+          const li = document.createElement('li');
+          const button = document.createElement('button');
+          button.textContent = `Unhide ${header}`;
+          button.addEventListener('click', () => {
+            columnVisibility[header] = true;
+            localStorage.setItem('columnVisibility', JSON.stringify(columnVisibility));
+            renderTable(displayedData, currentHeaders);
+          });
+          li.appendChild(button);
+          hiddenColumnsList.appendChild(li);
+        }
+      });
+    });
+  </script>
+
+</body>
+</html>
